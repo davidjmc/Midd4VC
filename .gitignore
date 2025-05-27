@@ -1,0 +1,42 @@
+# Ambientes virtuais
+venv/
+ENV/
+env/
+.venv/
+
+# Arquivos Python compilados
+__pycache__/
+*.py[cod]
+*$py.class
+
+# Logs e arquivos temporários
+*.log
+*.tmp
+*.bak
+*.swp
+.DS_Store
+
+# Arquivos de pacotes Python
+*.egg-info/
+dist/
+build/
+
+# Configurações do editor/IDE
+.vscode/
+.idea/
+*.sublime-project
+*.sublime-workspace
+
+# Arquivos de sistema
+Thumbs.db
+ehthumbs.db
+desktop.ini
+
+# Configurações do Jupyter (caso use futuramente)
+.ipynb_checkpoints/
+
+# Arquivos de testes/cache
+.tox/
+.coverage
+.cache/
+pytest_cache/
