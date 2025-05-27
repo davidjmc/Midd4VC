@@ -1,6 +1,6 @@
 import json
 
-class MiddlewareCore:
+class Midd4VCEngine:
     def __init__(self):
         self.vehicles = {}  # vehicle_id -> info
         self.tasks_queue = []  # lista de tarefas pendentes
@@ -11,13 +11,22 @@ class MiddlewareCore:
         self.mqtt_client = mqtt_client
 
     def register_vehicle(self, vehicle_info):
-        vid = vehicle_info["vehicle_id"]
-        self.vehicles[vid] = vehicle_info
-        print(f"[Midd4VCServer] Vehicle registered: {vid}")
-        self.mqtt_client.publish(f"vc/vehicle/{vid}/register/response", "Registration Successful", qos=0)
+        vehicle_id = vehicle_info["vehicle_id"]
+        
+        if vehicle_id in self.vehicles:
+            print(f"[Midd4VCServer] Vehicle {vehicle_id} already registered.")
+            return
+        
+        self.vehicles[vehicle_id] = vehicle_info
+        print(f"[Midd4VCServer] Vehicle registered: {vehicle_id}")
+        self.mqtt_client.publish(f"vc/vehicle/{vehicle_id}/register/response", "Registration Successful", qos=0)
         self.try_assign_tasks()
 
     def submit_task(self, task):
+        if "task_id" not in task or "function" not in task:
+            print(f"[Midd4VCServer] Invalid task format: {task}")
+            return
+
         self.tasks_queue.append(task)
         print(f"[Midd4VCServer] Task received: {task['task_id']}")
         self.try_assign_tasks()
@@ -36,8 +45,8 @@ class MiddlewareCore:
 
     def try_assign_tasks(self):
         available_vehicles = [
-            vid for vid in self.vehicles
-            if vid not in self.tasks_in_progress.values()
+            vehicle_id for vehicle_id in self.vehicles
+            if vehicle_id not in self.tasks_in_progress.values()
         ]
 
         while available_vehicles and self.tasks_queue:

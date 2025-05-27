@@ -40,3 +40,5 @@ desktop.ini
 .coverage
 .cache/
 pytest_cache/
+
+__init__.py

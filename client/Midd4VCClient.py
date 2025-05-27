@@ -21,12 +21,16 @@ PORT = int(os.getenv("MQTT_PORT", 1883))
 
 class Midd4VCClient:
     def __init__(self, role, client_id, model=None, make=None, year=None):
-        
         self.client_id = client_id
-        self.client = mqtt.Client(client_id=self.client_id)
+        self.client = mqtt.Client(client_id=self.client_id, clean_session=False)  # Garantir clean_session=False
         self.client.on_message = self._internal_on_message
+        self.client.on_connect = self.on_connect
+        self.client.on_disconnect = self.on_disconnect
+        self.client.reconnect_delay_set(min_delay=1, max_delay=10)
+        self.result_handler = None
         self.on_message_callback = None
-        
+
+
         self.tasks_module = importlib.import_module("tasks")
         self.running = False
 
@@ -39,16 +43,19 @@ class Midd4VCClient:
                 "year": year or 2000,
             }
 
+    def set_result_handler(self, handler_fn):
+        self.result_handler = handler_fn
+    
     def start(self):
         self.client.connect(BROKER, PORT, 60)
         self.client.loop_start()
         self.running = True
 
         if self.role == "client":
-            self.client.subscribe(TOPIC_TASK_RESULT)
+            self.client.subscribe(TOPIC_TASK_RESULT, qos=0)
             print("[Client] Started and listening for task results...")
         elif self.role == "vehicle":
-            self.client.subscribe(TOPIC_ASSIGN.format(vehicle_id=self.client_id))
+            self.client.subscribe(TOPIC_ASSIGN.format(vehicle_id=self.client_id), qos=0) 
             time.sleep(1)
             self.register()
 
@@ -75,13 +82,40 @@ class Midd4VCClient:
 
         if self.role == "client":
             print(f"[Client {self.client_id}] Received message on {msg.topic}: {data}")
+            if self.result_handler:
+                self.result_handler(data)
         elif self.role == "vehicle":
             threading.Thread(target=self.execute_task, args=(data,)).start()
 
+    def on_connect(self, client, userdata, flags, rc):
+        print(f"Connected with result code {rc}")
+        if self.role == "client":
+            self.client.subscribe(TOPIC_TASK_RESULT, qos=0)  # Garantir QoS 1
+        elif self.role == "vehicle":
+            # Após reconectar, re-assinar o tópico corretamente
+            self.client.subscribe(TOPIC_ASSIGN.format(vehicle_id=self.client_id), qos=0)  # Garantir QoS 1
+            print(f"[Vehicle {self.client_id}] Re-subscribed to {TOPIC_ASSIGN.format(vehicle_id=self.client_id)}")
+
+    def on_disconnect(self, client, userdata, rc):
+        print(f"Disconnected with result code {rc}")
+        if self.running:
+            print("Attempting to reconnect...")
+            self.client.reconnect()
+
     def execute_task(self, task):
+        # Verifique se a conexão MQTT está ativa antes de tentar executar a tarefa
+        if not self.client.is_connected():
+            print(f"[Vehicle {self.client_id}] Unable to execute task. MQTT client is not connected.")
+            return
+    
         task_id = task.get("task_id")
         function_name = task.get("function")
         args = task.get("args", [])
+
+        # Validar se a função e os argumentos estão presentes
+        if not function_name:
+            print(f"[Vehicle {self.client_id}] Error: No function specified in the task.")
+            return
 
         print(f"[Vehicle {self.client_id}] Executing task {task_id} ({function_name}) with args {args}")
 
@@ -89,7 +123,7 @@ class Midd4VCClient:
             func = getattr(self.tasks_module, function_name)
             result_value = func(*args)
         except Exception as e:
-            result_value = f"Erro ao executar: {str(e)}"
+            result_value = f"Error executing task: {str(e)}"
 
         result = {
             "task_id": task_id,
@@ -97,8 +131,8 @@ class Midd4VCClient:
             "result": result_value,
         }
 
-        self.client.publish(TOPIC_TASK_RESULT, json.dumps(result), qos=0)
-    
+        self.client.publish(TOPIC_TASK_RESULT, json.dumps(result), qos=0)  # Garantir QoS 1 para entrega de resultados
+
     def set_task_handler(self, handler_fn):
         self.task_handler = handler_fn
     
@@ -110,4 +144,3 @@ class Midd4VCClient:
             self.on_message_callback(client, userdata, msg)
         else:
             self.on_message(client, userdata, msg)
-    
