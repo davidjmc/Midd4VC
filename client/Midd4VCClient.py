@@ -1,40 +1,39 @@
 import json
 import time
 import threading
-import importlib
-import sys, os
+import os
 from uuid import uuid4
+from jobs import job_catalog
 
 import paho.mqtt.client as mqtt
 
-sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), '..', 'tasks')))
+#sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), '..', 'jobs')))
 
-# topics
-TOPIC_REGISTER = "vc/vehicle/register"
-TOPIC_ASSIGN = "vc/vehicle/{vehicle_id}/task/assign"
-TOPIC_TASK_SUBMIT = "vc/task/submit"
-TOPIC_TASK_RESULT = "vc/task/result"
+TOPIC_VEHICLE_REGISTER = "vc/vehicle/{vehicle_id}/register/request"
+TOPIC_JOB_ASSIGN = "vc/vehicle/{vehicle_id}/job/assign"
+TOPIC_JOB_SUBMIT = "vc/client/{client_id}/job/submit"
+TOPIC_JOB_RESULT = "vc/client/{client_id}/job/result"
 
-# settings
 BROKER = os.getenv("MQTT_BROKER", "localhost")
 PORT = int(os.getenv("MQTT_PORT", 1883))
 
 class Midd4VCClient:
     def __init__(self, role, client_id, model=None, make=None, year=None):
         self.client_id = client_id
-        self.client = mqtt.Client(client_id=self.client_id, clean_session=False)  # Garantir clean_session=False
+        self.role = role
+        self.client = mqtt.Client(client_id=self.client_id, clean_session=False)
         self.client.on_message = self._internal_on_message
-        self.client.on_connect = self.on_connect
-        self.client.on_disconnect = self.on_disconnect
+        self.client.on_connect = self._on_connect       
+        self.client.on_disconnect = self._on_disconnect 
         self.client.reconnect_delay_set(min_delay=1, max_delay=10)
+        
         self.result_handler = None
+        self.job_handler = None
         self.on_message_callback = None
-
-
-        self.tasks_module = importlib.import_module("tasks")
+        
+        self.processed_jobs = set()
         self.running = False
 
-        self.role = role
         if self.role == "vehicle":
             self.info = {
                 "vehicle_id": self.client_id,
@@ -45,17 +44,29 @@ class Midd4VCClient:
 
     def set_result_handler(self, handler_fn):
         self.result_handler = handler_fn
+
+    def set_job_handler(self, handler_fn):
+        self.job_handler = handler_fn
     
+    def set_on_message_callback(self, callback):
+        self.on_message_callback = callback
+       
     def start(self):
-        self.client.connect(BROKER, PORT, 60)
+        try:
+            self.client.connect(BROKER, PORT, 60)
+        except Exception as e:
+            print(f"[{self.role.capitalize()} {self.client_id}] Error connecting to MQTT: {e}")
+            return
+        
         self.client.loop_start()
         self.running = True
 
         if self.role == "client":
-            self.client.subscribe(TOPIC_TASK_RESULT, qos=0)
-            print("[Client] Started and listening for task results...")
+            self.client.subscribe(TOPIC_JOB_RESULT.format(client_id=self.client_id), qos=0)
+            #print("[Client] Started and listening for job results...")
+
         elif self.role == "vehicle":
-            self.client.subscribe(TOPIC_ASSIGN.format(vehicle_id=self.client_id), qos=0) 
+            self.client.subscribe(TOPIC_JOB_ASSIGN.format(vehicle_id=self.client_id), qos=0) 
             time.sleep(1)
             self.register()
 
@@ -63,84 +74,115 @@ class Midd4VCClient:
 
     def stop(self):
         self.running = False
+        self.client.loop_stop()
         self.client.disconnect()
         print(f"[{self.role.capitalize()} {self.client_id}] Stopped.")
 
     def register(self):
-        self.client.publish(TOPIC_REGISTER, json.dumps(self.info), qos=0)
+        if self.role == "vehicle":
+            self.client.publish(TOPIC_VEHICLE_REGISTER, json.dumps(self.info), qos=0)
+            print(f"[Vehicle {self.client_id}] Registring...")
 
-    def submit_task(self, task):
-        if "task_id" not in task:
-            task["task_id"] = str(uuid4())
-        print(f"[Client] Submitting task {task['task_id']}")
-        self.client.publish(TOPIC_TASK_SUBMIT, json.dumps(task), qos=0)
-        return task["task_id"]
-
-    def on_message(self, client, userdata, msg):
-        payload = msg.payload.decode()
-        data = json.loads(payload)
-
-        if self.role == "client":
-            print(f"[Client {self.client_id}] Received message on {msg.topic}: {data}")
-            if self.result_handler:
-                self.result_handler(data)
-        elif self.role == "vehicle":
-            threading.Thread(target=self.execute_task, args=(data,)).start()
-
-    def on_connect(self, client, userdata, flags, rc):
-        print(f"Connected with result code {rc}")
-        if self.role == "client":
-            self.client.subscribe(TOPIC_TASK_RESULT, qos=0)  # Garantir QoS 1
-        elif self.role == "vehicle":
-            # Após reconectar, re-assinar o tópico corretamente
-            self.client.subscribe(TOPIC_ASSIGN.format(vehicle_id=self.client_id), qos=0)  # Garantir QoS 1
-            print(f"[Vehicle {self.client_id}] Re-subscribed to {TOPIC_ASSIGN.format(vehicle_id=self.client_id)}")
-
-    def on_disconnect(self, client, userdata, rc):
-        print(f"Disconnected with result code {rc}")
-        if self.running:
-            print("Attempting to reconnect...")
-            self.client.reconnect()
-
-    def execute_task(self, task):
-        # Verifique se a conexão MQTT está ativa antes de tentar executar a tarefa
-        if not self.client.is_connected():
-            print(f"[Vehicle {self.client_id}] Unable to execute task. MQTT client is not connected.")
-            return
+    def submit_job(self, job):
+        if "job_id" not in job:
+            job["job_id"] = str(uuid4())
+        job["client_id"] = self.client_id
+        #print(f"[Client] Submitting job {job['job_id']}")
+        self.client.publish(TOPIC_JOB_SUBMIT, json.dumps(job), qos=0)
+        return job["job_id"]
     
-        task_id = task.get("task_id")
-        function_name = task.get("function")
-        args = task.get("args", [])
-
-        # Validar se a função e os argumentos estão presentes
-        if not function_name:
-            print(f"[Vehicle {self.client_id}] Error: No function specified in the task.")
-            return
-
-        print(f"[Vehicle {self.client_id}] Executing task {task_id} ({function_name}) with args {args}")
-
-        try:
-            func = getattr(self.tasks_module, function_name)
-            result_value = func(*args)
-        except Exception as e:
-            result_value = f"Error executing task: {str(e)}"
-
-        result = {
-            "task_id": task_id,
-            "vehicle_id": self.client_id,
-            "result": result_value,
-        }
-
-        self.client.publish(TOPIC_TASK_RESULT, json.dumps(result), qos=0)  # Garantir QoS 1 para entrega de resultados
-
-    def set_task_handler(self, handler_fn):
-        self.task_handler = handler_fn
-    
-    def set_on_message_callback(self, callback):
-        self.on_message_callback = callback
-
     def _internal_on_message(self, client, userdata, msg):
         if self.on_message_callback:
             self.on_message_callback(client, userdata, msg)
         else:
             self.on_message(client, userdata, msg)
+    
+    def on_message(self, client, userdata, msg):
+        payload = msg.payload.decode()
+        try:
+            data = json.loads(payload)
+        except json.JSONDecodeError:
+            print(f"[{self.role.capitalize()} {self.client_id}] Invalid JSON message: {payload}")
+            return
+
+        if self.role == "client":
+            if self.result_handler:
+                result = {
+                    'job_id': data['job_id'],
+                    'result': data['result']
+                }
+                # self.result_handler(data)
+                self.result_handler(result)
+            else:
+                print(f"[Client {self.client_id}] Result received: {data}")
+        elif self.role == "vehicle":
+            threading.Thread(target=self.execute_job, args=(data,), daemon=True).start()
+    
+    def execute_job(self, job):
+        if not self.client.is_connected():
+            print(f"[Vehicle {self.client_id}] Cannot execute job. MQTT client not connected.")
+            return
+
+        job_id = job.get("job_id")
+        client_id = job.get("client_id")
+
+        if job_id is None:
+            print(f"[Vehicle {self.client_id}] Job received without job_id, ignoring.")
+            return
+
+        if job_id in self.processed_jobs:
+            print(f"[Vehicle {self.client_id}] Duplicate job {job_id} ignored.")
+            return
+        
+        self.processed_jobs.add(job_id)
+
+        if client_id is None:
+            print(f"[Vehicle {self.client_id}] Aviso: client_id ausente na tarefa. Resultado não será enviado.")
+            return
+
+        # print(f"[Vehicle {self.client_id}] Executando tarefa {job_id} ({job.get('function')}) com args {job.get('args', [])}")
+        print(f"[Vehicle {self.client_id}] Executing job {job_id}")
+
+        
+        if self.job_handler:
+            result = self.job_handler(job)
+        else:
+            function_name = job.get("function")
+            args = job.get("args", [])
+            try:
+                func = job_catalog.JOBS_CATALOG.get(function_name)
+                print(func)
+                result_value = func(*args)
+                result = {
+                    "job_id": job_id,
+                    "vehicle_id": self.client_id,
+                    "result": result_value,
+                }
+            except Exception as e:
+                result = {
+                    "job_id": job_id,
+                    "vehicle_id": self.client_id,
+                    "error": f"Erro ao executar tarefa: {str(e)}"
+                }
+
+        self.client.publish(TOPIC_JOB_RESULT.format(client_id=client_id), json.dumps(result), qos=0)
+    
+    def _on_connect(self, client, userdata, flags, rc):
+        print(f"[{self.role.capitalize()} {self.client_id}] Conectado no broker com código {rc}")
+        if rc == 0:
+            if self.role == "client":
+                self.client.subscribe(TOPIC_JOB_RESULT.format(client_id=self.client_id), qos=0)
+            elif self.role == "vehicle":
+                self.client.subscribe(TOPIC_JOB_ASSIGN.format(vehicle_id=self.client_id), qos=0)
+                print(f"[Vehicle {self.client_id}] Re-subcrito ao tópico {TOPIC_JOB_ASSIGN.format(vehicle_id=self.client_id)}")
+        else:
+            print(f"[{self.role.capitalize()} {self.client_id}] Erro na conexão: código {rc}")
+
+    def _on_disconnect(self, client, userdata, rc):
+        print(f"[{self.role.capitalize()} {self.client_id}] Desconectado do broker com código {rc}")
+        if self.running and rc != 0:
+            print(f"[{self.role.capitalize()} {self.client_id}] Tentando reconectar...")
+            try:
+                self.client.reconnect()
+            except Exception as e:
+                print(f"[{self.role.capitalize()} {self.client_id}] Falha na reconexão: {e}")

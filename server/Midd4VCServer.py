@@ -4,11 +4,11 @@ import time
 import paho.mqtt.client as mqtt
 from Midd4VCEngine import Midd4VCEngine
 
-TOPIC_VEHICLE_REGISTER = "vc/vehicle/register"
-TOPIC_TASK_SUBMIT = "vc/task/submit"
-#TOPIC_TASK_ASSIGN = "vc/task/assign"
-TOPIC_TASK_ASSIGN = "vc/vehicle/{vehicle_id}/task/assign"
-TOPIC_TASK_RESULT = "vc/task/result"
+TOPIC_VEHICLE_REGISTER = "vc/vehicle/+/register/request"
+TOPIC_JOB_SUBMIT = "vc/client/+/job/submit"
+TOPIC_JOB_ASSIGN = "vc/vehicle/{vehicle_id}/job/assign"
+TOPIC_JOB_RESULT = "vc/client/+/job/result"
+
 
 BROKER = os.getenv("MQTT_BROKER", "localhost")
 PORT = int(os.getenv("MQTT_PORT", 1883))
@@ -29,35 +29,51 @@ class Midd4VCServer:
 
     def on_disconnect(self, client, userdata, rc):
         print(f"[{self.client._client_id.decode()}] Disconnected with result code {rc}")
-        if rc != 0:  # Se a desconexão não foi normal, tentamos reconectar
-            print("[Midd4VCServer] Reconnecting...")
-            self.connect()  # Tentar reconectar
+        if rc != 0:
+            try:
+                self.client.reconnect()
+            except Exception as e:
+                print(f"[Midd4VCServer] Reconnect failed: {e}")
 
     def start(self):
         self.client.connect(BROKER, PORT, 60)
         self.client.loop_start()
 
-        self.client.subscribe(TOPIC_VEHICLE_REGISTER); print(f"[{self.client._client_id.decode()}] Subscribed to {TOPIC_VEHICLE_REGISTER}")
-        self.client.subscribe(TOPIC_TASK_SUBMIT); print(f"[{self.client._client_id.decode()}] Subscribed to {TOPIC_TASK_SUBMIT}")
-        self.client.subscribe(TOPIC_TASK_RESULT); print(f"[{self.client._client_id.decode()}] Subscribed to {TOPIC_TASK_RESULT}")
+        self.client.subscribe(TOPIC_VEHICLE_REGISTER, qos=0); #print(f"[{self.client._client_id.decode()}] Subscribed to {TOPIC_VEHICLE_REGISTER}")
+        self.client.subscribe(TOPIC_JOB_SUBMIT, qos=0); #print(f"[{self.client._client_id.decode()}] Subscribed to {TOPIC_JOB_SUBMIT}")
+        self.client.subscribe(TOPIC_JOB_RESULT, qos=0); #print(f"[{self.client._client_id.decode()}] Subscribed to {TOPIC_JOB_RESULT}")
         print("[Midd4VCServer] Server started and subscribed to topics.")
 
     def on_message(self, client, userdata, msg):
         try:
             payload = msg.payload.decode()
-            print(f"[Midd4VCServer] Received on {msg.topic}: {payload}")
+            #print(f"[Midd4VCServer] Received on {msg.topic}: {payload}")
 
-            if msg.topic == TOPIC_VEHICLE_REGISTER:
+            if msg.topic.endswith("register/request"):
                 vehicle_info = json.loads(payload)
                 self.engine.register_vehicle(vehicle_info)
 
-            elif msg.topic == TOPIC_TASK_SUBMIT:
-                task = json.loads(payload)
-                self.engine.submit_task(task)
+            elif msg.topic.endswith("job/submit"):
+                job = json.loads(payload)
+                self.engine.submit_job(job)
 
-            elif msg.topic == TOPIC_TASK_RESULT:
+            elif msg.topic.endswith("job/result"):
                 result = json.loads(payload)
-                self.engine.task_completed(result)
+                self.engine.job_completed(result)
+
+            ## old topics
+
+            # if msg.topic == TOPIC_VEHICLE_REGISTER:
+            #     vehicle_info = json.loads(payload)
+            #     self.engine.register_vehicle(vehicle_info)
+
+            # elif msg.topic == TOPIC_JOB_SUBMIT:
+            #     job = json.loads(payload)
+            #     self.engine.submit_job(job)
+
+            # elif msg.topic.startswith("vc/job/result/"):
+            #     result = json.loads(payload)
+            #     self.engine.job_completed(result)
         except Exception as e:
             print(f"[Midd4VCServer] Error processing message: {str(e)}")
 
@@ -83,5 +99,5 @@ if __name__ == "__main__":
         while True:
             time.sleep(1)
     except KeyboardInterrupt:
-        print("[Midd4VCServer] Stopping server...")
+        # print("[Midd4VCServer] Stopping server...")
         server.stop()
