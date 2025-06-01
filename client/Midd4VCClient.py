@@ -7,8 +7,6 @@ from jobs import job_catalog
 
 import paho.mqtt.client as mqtt
 
-#sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), '..', 'jobs')))
-
 TOPIC_VEHICLE_REGISTER = "vc/vehicle/{vehicle_id}/register/request"
 TOPIC_JOB_ASSIGN = "vc/vehicle/{vehicle_id}/job/assign"
 TOPIC_JOB_SUBMIT = "vc/client/{client_id}/job/submit"
@@ -109,6 +107,7 @@ class Midd4VCClient:
             if self.result_handler:
                 result = {
                     'job_id': data['job_id'],
+                    'vehicle_id': data['vehicle_id'],
                     'result': data['result']
                 }
                 # self.result_handler(data)
@@ -137,11 +136,11 @@ class Midd4VCClient:
         self.processed_jobs.add(job_id)
 
         if client_id is None:
-            print(f"[Vehicle {self.client_id}] Aviso: client_id ausente na tarefa. Resultado não será enviado.")
+            print(f"[Vehicle {self.client_id}] Warning: client_id missing in job. Result will not be sent.")
             return
 
         # print(f"[Vehicle {self.client_id}] Executando tarefa {job_id} ({job.get('function')}) com args {job.get('args', [])}")
-        print(f"[Vehicle {self.client_id}] Executing job {job_id}")
+        print(f"[Vehicle {self.client_id}] Executing job {job_id}.")
 
         
         if self.job_handler:
@@ -162,27 +161,27 @@ class Midd4VCClient:
                 result = {
                     "job_id": job_id,
                     "vehicle_id": self.client_id,
-                    "error": f"Erro ao executar tarefa: {str(e)}"
+                    "error": f"Error executing job: {str(e)}"
                 }
 
         self.client.publish(TOPIC_JOB_RESULT.format(client_id=client_id), json.dumps(result), qos=0)
     
     def _on_connect(self, client, userdata, flags, rc):
-        print(f"[{self.role.capitalize()} {self.client_id}] Conectado no broker com código {rc}")
+        print(f"[{self.role.capitalize()} {self.client_id}] Connected to broker with code: {rc}")
         if rc == 0:
             if self.role == "client":
                 self.client.subscribe(TOPIC_JOB_RESULT.format(client_id=self.client_id), qos=0)
             elif self.role == "vehicle":
                 self.client.subscribe(TOPIC_JOB_ASSIGN.format(vehicle_id=self.client_id), qos=0)
-                print(f"[Vehicle {self.client_id}] Re-subcrito ao tópico {TOPIC_JOB_ASSIGN.format(vehicle_id=self.client_id)}")
+                print(f"[Vehicle {self.client_id}] Re-subscribed to topic: {TOPIC_JOB_ASSIGN.format(vehicle_id=self.client_id)}")
         else:
-            print(f"[{self.role.capitalize()} {self.client_id}] Erro na conexão: código {rc}")
+            print(f"[{self.role.capitalize()} {self.client_id}] Connection error: code: {rc}")
 
     def _on_disconnect(self, client, userdata, rc):
-        print(f"[{self.role.capitalize()} {self.client_id}] Desconectado do broker com código {rc}")
+        print(f"[{self.role.capitalize()} {self.client_id}] Disconnected from broker with code: {rc}")
         if self.running and rc != 0:
-            print(f"[{self.role.capitalize()} {self.client_id}] Tentando reconectar...")
+            print(f"[{self.role.capitalize()} {self.client_id}] Trying to reconnect...")
             try:
                 self.client.reconnect()
             except Exception as e:
-                print(f"[{self.role.capitalize()} {self.client_id}] Falha na reconexão: {e}")
+                print(f"[{self.role.capitalize()} {self.client_id}] Reconnection failed: {e}")

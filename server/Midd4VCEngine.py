@@ -1,11 +1,29 @@
 import json
+import time
+
+from jass import least_loaded
+
+ASSIGNMENT_STRATEGIES = {
+    "least_loaded": least_loaded.assign_jobs_least_loaded,
+    # new assinment strategies
+}
 
 class Midd4VCEngine:
     def __init__(self):
         self.vehicles = {}  # vehicle_id -> info
-        self.jobs_queue = []  # lista de tarefas pendentes
+        self.jobs_queue = []  # list of pending jobs
         self.jobs_in_progress = {}  # job_id -> vehicle_id
-        self.mqtt_client = None  # será setado pelo servidor
+        self.vehicle_load = {}
+        
+        # add load balancing 
+        self.job_assignments = {}        
+        self.job_timeout = 30 # job timeout in seconds            
+
+        self.vehicle_order = []
+        self.next_vehicle_index = 0
+
+        self.mqtt_client = None
+        self.current_assignment_strategy = "least_loaded" # (default: least loaded strategy)
 
     def set_mqtt_client(self, mqtt_client):
         self.mqtt_client = mqtt_client
@@ -18,6 +36,7 @@ class Midd4VCEngine:
             return
         
         self.vehicles[vehicle_id] = vehicle_info
+        self.vehicle_order.append(vehicle_id) # new
         print(f"[Midd4VCServer] Vehicle registered: {vehicle_id}")
         self.mqtt_client.publish(f"vc/vehicle/{vehicle_id}/register/response", "Registration Successful", qos=1)
         self.try_assign_jobs()
@@ -41,6 +60,12 @@ class Midd4VCEngine:
             del self.jobs_in_progress[job_id]
         else:
             print(f"[Midd4VCServer] job {job_id} not found in progress for vehicle {vehicle_id}")
+        
+        if job_id in self.job_assignments:
+            del self.job_assignments[job_id]
+        
+         # Update vehicle load counter
+        self.vehicle_load[vehicle_id] = self.vehicle_load.get(vehicle_id, 0) + 1
             
         if self.mqtt_client and client_id:
             # topic = f"vc/application/{client_id}/job/result"
@@ -51,22 +76,43 @@ class Midd4VCEngine:
             #print(f"[Midd4VCServer] MQTT client not set or app_id missing. Cannot send result for job {job_id}")
     
         self.try_assign_jobs()
+    
+    def check_job_timeouts(self):
+        now = time.time()
+        expired_jobs = []
 
+        for job_id, info in list(self.job_assignments.items()):
+            if now - info["assigned_at"] > self.job_timeout:
+                print(f"[Midd4VC] Job {job_id} timed out. Re-enqueueing.")
+                expired_jobs.append(job_id)
+
+        for job_id in expired_jobs:
+            vehicle_id = self.job_assignments[job_id]["vehicle_id"]
+
+            # Re-queue the job
+            job = self.job_assignments[job_id]["job_data"]
+            self.jobs_queue.insert(0, job)
+
+            # Remove from records
+            del self.jobs_in_progress[job_id]
+            del self.job_assignments[job_id]
+
+    def set_assignment_strategy(self, strategy_name):
+        if strategy_name in ASSIGNMENT_STRATEGIES:
+            self.current_assignment_strategy = strategy_name
+            print(f"[Midd4VCEngine] Assignment strategy set to '{strategy_name}'.")
+        else:
+            print(f"[Midd4VCEngine] Unknown assignment strategy '{strategy_name}', keeping current.")
+    
     def try_assign_jobs(self):
-        available_vehicles = [
-            vehicle_id for vehicle_id in self.vehicles
-            if vehicle_id not in self.jobs_in_progress.values()
-        ]
+        self.check_job_timeouts()
 
-        while available_vehicles and self.jobs_queue:
-            vehicle_id = available_vehicles.pop(0)
-            job = self.jobs_queue.pop(0)
-            job_id = job["job_id"]
+        strategy_name = self.current_assignment_strategy
+        strategy_func = ASSIGNMENT_STRATEGIES.get(strategy_name)
 
-            self.jobs_in_progress[job_id] = vehicle_id
-            print(f"[Midd4VCServer] Assigning job {job_id} to vehicle {vehicle_id}")
+        if strategy_func:
+            strategy_func(self)
+        else:
+            print(f"[Midd4VCEngine] No valid assignment strategy found. Using 'least_loaded' fallback.")
+            # ASSIGNMENT_STRATEGIES["least_loaded"](self)
 
-            if self.mqtt_client:
-                self.mqtt_client.publish(f"vc/vehicle/{vehicle_id}/job/assign", json.dumps(job), qos=0)
-            else: 
-                print(f"[Midd4VCServer] MQTT client not set. Cannot assign job {job_id}.")

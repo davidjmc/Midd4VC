@@ -60,20 +60,6 @@ class Midd4VCServer:
             elif msg.topic.endswith("job/result"):
                 result = json.loads(payload)
                 self.engine.job_completed(result)
-
-            ## old topics
-
-            # if msg.topic == TOPIC_VEHICLE_REGISTER:
-            #     vehicle_info = json.loads(payload)
-            #     self.engine.register_vehicle(vehicle_info)
-
-            # elif msg.topic == TOPIC_JOB_SUBMIT:
-            #     job = json.loads(payload)
-            #     self.engine.submit_job(job)
-
-            # elif msg.topic.startswith("vc/job/result/"):
-            #     result = json.loads(payload)
-            #     self.engine.job_completed(result)
         except Exception as e:
             print(f"[Midd4VCServer] Error processing message: {str(e)}")
 

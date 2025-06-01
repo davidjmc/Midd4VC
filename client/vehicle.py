@@ -32,14 +32,14 @@ class Vehicle:
             }
 
 if __name__ == "__main__":
-    vehicle = Vehicle(vehicle_id="veh2", model="ModelX", make="MakeY", year=2020)
+    vehicle = Vehicle(vehicle_id="veh1", model="ModelX", make="MakeY", year=2020)
     vc = Midd4VCClient(role="vehicle", client_id=vehicle.vehicle_id, model=vehicle.model, make=vehicle.make, year=vehicle.year)
     vc.set_job_handler(vehicle.job_handler)
     vc.start()
 
     try:
         while True:
-            time.sleep(1)
+            time.sleep(10)
     except KeyboardInterrupt:
         print("Stopping vehicle...")
         vc.stop()
