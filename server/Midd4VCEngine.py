@@ -1,10 +1,11 @@
 import json
 import time
 
-from jass import least_loaded
+from jass import least_loaded, round_robin
 
 ASSIGNMENT_STRATEGIES = {
     "least_loaded": least_loaded.assign_jobs_least_loaded,
+    "round_robin": round_robin.assign_jobs_round_robin
     # new assinment strategies
 }
 
@@ -24,6 +25,7 @@ class Midd4VCEngine:
 
         self.mqtt_client = None
         self.current_assignment_strategy = "least_loaded" # (default: least loaded strategy)
+        # self.current_assignment_strategy = "round_robin" 
 
     def set_mqtt_client(self, mqtt_client):
         self.mqtt_client = mqtt_client
