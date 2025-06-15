@@ -1,11 +1,11 @@
 import json
 import time
 
-from jass import least_loaded, round_robin
+from jass import least_loaded #, round_robin
 
 ASSIGNMENT_STRATEGIES = {
     "least_loaded": least_loaded.assign_jobs_least_loaded,
-    "round_robin": round_robin.assign_jobs_round_robin
+    # "round_robin": round_robin.assign_jobs_round_robin
     # new assinment strategies
 }
 
